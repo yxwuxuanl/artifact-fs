@@ -182,7 +182,7 @@ func (fs *ArtifactFuse) LookUpInode(_ context.Context, op *fuseops.LookUpInodeOp
 		return nil
 	}
 
-	mode, size, typ, mtime, err := fs.resolver.Getattr(childPath)
+	mode, size, typ, mtime, ctime, err := fs.resolver.Getattr(childPath)
 	if err != nil {
 		if errors.Is(err, iofs.ErrNotExist) {
 			return syscall.ENOENT
@@ -195,7 +195,7 @@ func (fs *ArtifactFuse) LookUpInode(_ context.Context, op *fuseops.LookUpInodeOp
 	fs.mu.Unlock()
 
 	op.Entry.Child = ref.ID
-	op.Entry.Attributes = inodeAttrs(mode, uint64(size), typ, mtime)
+	op.Entry.Attributes = inodeAttrs(mode, uint64(size), typ, mtime, ctime)
 	setChildEntryExpiry(&op.Entry, time.Second)
 	return nil
 }
@@ -212,11 +212,11 @@ func (fs *ArtifactFuse) GetInodeAttributes(_ context.Context, op *fuseops.GetIno
 		return nil
 	}
 
-	mode, size, typ, mtime, err := fs.resolver.Getattr(ref.Path)
+	mode, size, typ, mtime, ctime, err := fs.resolver.Getattr(ref.Path)
 	if err != nil {
 		return syscall.ENOENT
 	}
-	op.Attributes = inodeAttrs(mode, uint64(size), typ, mtime)
+	op.Attributes = inodeAttrs(mode, uint64(size), typ, mtime, ctime)
 	op.AttributesExpiration = attrExpiry(time.Second)
 	return nil
 }
@@ -233,17 +233,18 @@ func (fs *ArtifactFuse) SetInodeAttributes(ctx context.Context, op *fuseops.SetI
 	}
 	// Handle mtime updates (e.g., from touch)
 	if op.Mtime != nil {
-		fs.engine.SetMtime(ctx, ref.Path, *op.Mtime)
+		if err := fs.engine.SetMtime(ctx, ref.Path, *op.Mtime); err != nil {
+			if errors.Is(err, iofs.ErrInvalid) {
+				return syscall.ENOTSUP
+			}
+			return syscall.EIO
+		}
 	}
-	mode, size, typ, mtime, err := fs.resolver.Getattr(ref.Path)
+	mode, size, typ, mtime, ctime, err := fs.resolver.Getattr(ref.Path)
 	if err != nil {
 		return syscall.EIO
 	}
-	// If caller set mtime, return that instead of the stored value
-	if op.Mtime != nil {
-		mtime = *op.Mtime
-	}
-	op.Attributes = inodeAttrs(mode, uint64(size), typ, mtime)
+	op.Attributes = inodeAttrs(mode, uint64(size), typ, mtime, ctime)
 	op.AttributesExpiration = attrExpiry(time.Second)
 	return nil
 }
@@ -403,7 +404,8 @@ func (fs *ArtifactFuse) CreateFile(ctx context.Context, op *fuseops.CreateFileOp
 	fs.mu.Unlock()
 
 	op.Entry.Child = ref.ID
-	op.Entry.Attributes = inodeAttrs(uint32(op.Mode), 0, "file", time.Now())
+	now := time.Now()
+	op.Entry.Attributes = inodeAttrs(uint32(op.Mode), 0, "file", now, now)
 	setChildEntryExpiry(&op.Entry, time.Second)
 	op.Handle = handle
 	return nil
@@ -422,7 +424,8 @@ func (fs *ArtifactFuse) MkDir(ctx context.Context, op *fuseops.MkDirOp) error {
 	fs.mu.Unlock()
 
 	op.Entry.Child = ref.ID
-	op.Entry.Attributes = inodeAttrs(uint32(op.Mode)|uint32(os.ModeDir), 4096, "dir", time.Now())
+	now := time.Now()
+	op.Entry.Attributes = inodeAttrs(uint32(op.Mode)|uint32(os.ModeDir), 4096, "dir", now, now)
 	setChildEntryExpiry(&op.Entry, time.Second)
 	return nil
 }
@@ -464,6 +467,9 @@ func (fs *ArtifactFuse) Rename(ctx context.Context, op *fuseops.RenameOp) error 
 	oldPath := cleanChildPath(oldParent.Path, op.OldName)
 	newPath := cleanChildPath(newParent.Path, op.NewName)
 	if err := fs.engine.Rename(ctx, oldPath, newPath); err != nil {
+		if errors.Is(err, iofs.ErrInvalid) {
+			return syscall.ENOTSUP
+		}
 		return syscall.EIO
 	}
 	return nil
@@ -587,15 +593,8 @@ func TryUnmount(mountPoint string) error {
 	return err
 }
 
-func inodeAttrs(mode uint32, size uint64, typ string, mtime time.Time) fuseops.InodeAttributes {
+func inodeAttrs(mode uint32, size uint64, typ string, mtime time.Time, ctime time.Time) fuseops.InodeAttributes {
 	m := os.FileMode(mode & 0o777)
-	if m == 0 {
-		if typ == "dir" {
-			m = 0o755
-		} else {
-			m = 0o644
-		}
-	}
 	switch typ {
 	case "dir":
 		m |= os.ModeDir
@@ -611,7 +610,9 @@ func inodeAttrs(mode uint32, size uint64, typ string, mtime time.Time) fuseops.I
 		Mode:  m,
 		Uid:   uint32(os.Getuid()),
 		Gid:   uint32(os.Getgid()),
+		Atime: mtime,
 		Mtime: mtime,
+		Ctime: ctime,
 	}
 }
 
@@ -630,12 +631,15 @@ func setChildEntryExpiry(entry *fuseops.ChildInodeEntry, ttl time.Duration) {
 }
 
 func (fs *ArtifactFuse) gitFileAttrs() fuseops.InodeAttributes {
+	now := time.Now()
 	return fuseops.InodeAttributes{
 		Size:  uint64(len(fs.gitfileContent)),
 		Mode:  0o644,
 		Nlink: 1,
 		Uid:   uint32(os.Getuid()),
 		Gid:   uint32(os.Getgid()),
-		Mtime: time.Now(),
+		Atime: now,
+		Mtime: now,
+		Ctime: now,
 	}
 }
