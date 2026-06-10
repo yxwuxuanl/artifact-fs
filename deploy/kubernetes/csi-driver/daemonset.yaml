@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: csi-artifact-fs-node
+  namespace: kube-system
+  labels:
+    app: csi-artifact-fs-node
+spec:
+  selector:
+    matchLabels:
+      app: csi-artifact-fs-node
+  template:
+    metadata:
+      labels:
+        app: csi-artifact-fs-node
+    spec:
+      serviceAccountName: csi-artifact-fs
+      hostNetwork: true
+      containers:
+        - name: csi-driver
+          image: ghcr.io/cloudflare/artifact-fs-csi:latest
+          args:
+            - --csi-address=unix:///csi/csi.sock
+            - --root=/var/lib/artifact-fs-csi
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: data-dir
+              mountPath: /var/lib/artifact-fs-csi
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: fuse-device
+              mountPath: /dev/fuse
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --leader-election
+            - --leader-election-namespace=kube-system
+            - --default-fstype=fuse
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.artifact-fs.cloudflare.com/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.artifact-fs.cloudflare.com
+            type: DirectoryOrCreate
+        - name: data-dir
+          hostPath:
+            path: /var/lib/artifact-fs-csi
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: fuse-device
+          hostPath:
+            path: /dev/fuse
+            type: CharDevice

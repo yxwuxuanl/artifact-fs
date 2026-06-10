@@ -1,0 +1,12 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: artifact-fs
+provisioner: csi.artifact-fs.cloudflare.com
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+parameters:
+  remoteURL: ""
+  branch: "main"
+  refreshInterval: "30s"
