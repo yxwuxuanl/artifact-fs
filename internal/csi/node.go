@@ -3,6 +3,7 @@ package csi
 import (
 	"context"
 	"log/slog"
+	"os"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -52,6 +53,13 @@ func (ns *nodeService) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 		return nil, status.Errorf(codes.Internal, "unpublish volume: %v", err)
 	}
 	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
+func (ns *nodeService) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
+	return &csi.NodeGetInfoResponse{
+		NodeId:            os.Getenv("NODE_NAME"),
+		MaxVolumesPerNode: 0,
+	}, nil
 }
 
 func (ns *nodeService) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
