@@ -56,8 +56,16 @@ func (ns *nodeService) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 }
 
 func (ns *nodeService) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
+	nodeID := os.Getenv("NODE_NAME")
+	if nodeID == "" {
+		var err error
+		nodeID, err = os.Hostname()
+		if err != nil {
+			nodeID = "unknown"
+		}
+	}
 	return &csi.NodeGetInfoResponse{
-		NodeId:            os.Getenv("NODE_NAME"),
+		NodeId:            nodeID,
 		MaxVolumesPerNode: 0,
 	}, nil
 }
